@@ -1,0 +1,314 @@
+---
+title: "1.merging_met_files"
+author: "Sara Knox"
+date: "04/09/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls())
+
+# load libraries
+library(dplyr)
+library(gtools)
+library(gdata)
+library(ggplot2)
+library(tidyr)
+library(plotly)
+
+# set wd
+getwd()
+siteID <- 'RBM'
+rdir <- "/Users/ziyi/Google Drive/.shortcut-targets-by-id/1txCh9lZ7VGCujXGvBaJCMVnuxT-65q4K/Micromet\ Lab/Projects/2022-RBM Richmond brackish marsh/Flux-tower/met_data/" # working directory
+knitr::opts_knit$set(root.dir = paste(rdir,"cr1000",sep=''))
+```
+
+```{r load data, echo=FALSE, include=FALSE}
+
+# Identify files
+raw.files <- Sys.glob("*.csv")
+
+# Initialize with Air temperature file - longest data record
+cr1000 <- read.csv(paste(siteID,"DTA.csv",sep=""),
+                   header = TRUE,
+                   sep = ",")
+colnames(cr1000)[1] <- "Timestamp"
+cr1000$Timestamp <- as.POSIXct(cr1000$Timestamp, format = "%Y-%m-%d %H:%M")
+
+# Remova NA values (coinciding with daylight savings)
+cr1000 <- cr1000[!is.na(cr1000$Timestamp), ]
+
+# To keep CR1000 data only and exclude smartflux data
+cr1000 <- select(cr1000,!contains("smartflux"))
+cr1000 <- cr1000[1:ncol(cr1000)-1]
+
+
+## Remove BB2 column and extra X column (not sure where this came from)
+#cr1000 <- cr1000[,(-grep("BB2|X", colnames(cr1000)))]
+
+# Define length of 1st imported csv file to make sure all other imported files are of the same length 
+Length <- nrow(cr1000)
+
+
+# Now add other variable to dataframe
+for (i in raw.files[2:length(raw.files)]) {
+  sample <- read.csv(i,
+                     header = TRUE,
+                     sep = ",")
+  colnames(sample)[1] <- "Timestamp"
+  sample$Timestamp <- as.POSIXct(sample$Timestamp, format = "%Y-%m-%d %H:%M")
+  
+  # Remova NA values (coinciding with daylight savings)
+  sample <- sample[!is.na(sample$Timestamp), ]
+  # To keep CR1000 data only and exclude smartflux data
+  if (ncol(sample)>4) {
+  sample <- select(sample,!contains("smartflux"))
+  }
+  sample <- sample[1:ncol(sample)-1]
+  # Make all imported files the same length
+  sample <- slice(sample, 1: Length)
+  
+  cr1000 <-merge(x=cr1000,y=sample,by="Timestamp",all=TRUE)
+}
+
+cr1000$Timestamp <- as.POSIXct(cr1000$Timestamp, format = "%Y-%m-%d %H:%M")
+
+#cr1000 <- cr1000[,(-grep("BB2|X", colnames(cr1000)))]
+
+
+
+names(cr1000)
+
+# If adding a new variable, rename here!
+
+#names(cr1000) <- c("Timestamp", "AIR_TEMP_2M", "AIR_TEMP_3.5M","ORP",
+#                   "BF5_Diffuse","BF5_Total","INCOMING_PAR", "REFLECTED_PAR",
+#                   "PRECIP","PA_EC2_AIR","PA_2M","SHORTWAVE_IN", "SHORTWAVE_OUT",
+#                   "LONGWAVE_IN", "LONGWAVE_OUT", "RH_2M", "RH_3.5M",
+#                    "SHFP_1", "SHFP_2", "SHFP_3", 
+#                   "SOIL_TEMP_1_5CM","SOIL_TEMP_1_10CM", "SOIL_TEMP_1_20CM","SOIL_TEMP_1_50CM",
+#                   "SOIL_TEMP_2_5CM","SOIL_TEMP_2_10CM", "SOIL_TEMP_2_20CM","SOIL_TEMP_2_50CM",
+#                   "Wind_Direction_CUP","Wind_Direction_EC",
+#                   "WTH", "WATER_TEMP","WIND_VELOCITY_CUP", "WIND_VELOCITY_EC")
+
+names(cr1000) <- c("Timestamp","TA_1_1_1", "TA_1_2_1", "REDin_1_1_1", "REDout_1_1_1", 
+                   "NIRin_1_1_1", "NIRout_1_1_1", "NDVI_1_1_1", "ORP_1_1_1", 
+                   "PPFDD_1_1_1", "PPFD_2_1_1", "PPFD_1_1_1", "PPFDR_1_1_1", 
+                   "P_1_1_1", "nm532in_1_1_1", "nm532out_1_1_1", "nm570in_1_1_1", 
+                   "nm570out_1_1_1", "PRI_1_1_1", "PA_EC_AIR", "PA_1_1_1", 
+                   "SWIN_1_1_1", "SWOUT_1_1_1", "LWIN_1_1_1", "LWOUT_1_1_1", 
+                   "RH_1_1_1", "RH_1_2_1", "SHF_1_1_1", "SHF_2_1_1", 
+                   "SHF_3_1_1", "TS_1_1_1", "TS_1_2_1", "TS_1_3_1", "TS_1_4_1", 
+                   "TS_2_1_1", "TS_2_2_1", "TS_2_3_1", "TS_2_4_1", "COND_1_1_1","Salinity", 
+                   "WD_1_1_1", "Wind_Direction_EC", "DO_1_1_1", "DOperc_1_1_1", 
+                   "WL_1_1_1", "TW_1_1_1", "WS_1_1_1", "Wind_Velocity_EC", "pH_1_1_1")
+
+# Delete Salinity
+cr1000 <- select(cr1000,-Salinity)
+
+# Convert NaN to NA
+is.nan.data.frame <- function(cr1000)
+  do.call(cbind, lapply(cr1000, is.nan))
+
+cr1000[is.nan(cr1000)] <- NA
+
+
+head(cr1000)
+str(cr1000)
+
+# Create year & DOY variables
+cr1000 <- cr1000 %>%
+  mutate(year = as.numeric(format(Timestamp,'%Y')),
+         DOY = as.numeric(format(Timestamp,'%j')))
+
+cr1000$year <- factor(cr1000$year)
+```
+
+```{r plot air temperature, echo=FALSE, message=FALSE}
+
+# Air temperature - full time series
+plot_ly(data = cr1000, x = ~Timestamp, y = ~TA_1_2_1, name = 'TA 3.5M', type = 'scatter', mode = 'lines') %>%
+  add_trace(y = ~TA_1_1_1, name = '2 m', mode = 'lines')
+
+# Air temperature - by year
+ggplot(data = cr1000, mapping = aes(x = DOY, y = TA_1_1_1, na.rm = TRUE)) +
+  geom_line(aes(colour=year, group=year))
+
+ggplot(data = cr1000, mapping = aes(x = DOY, y = TA_1_2_1, na.rm = TRUE)) +
+  geom_line(aes(colour=year, group=year))
+```
+
+```{r plot oxidation reduction potential, echo=FALSE, message=FALSE}
+
+# Oxidation, reduction potential - full time series
+#plot_ly(data = cr1000, x = ~Timestamp, y = ~ORP, name = 'ORP', type = 'scatter', mode = 'lines') 
+
+# ORP - by year
+#ggplot(data = cr1000, mapping = aes(x = DOY, y = ORP_10CM, na.rm = TRUE)) +
+#  geom_line(aes(colour=year, group=year))
+
+#ggplot(data = cr1000, mapping = aes(x = DOY, y = ORP_30CM, na.rm = TRUE)) +
+#  geom_line(aes(colour=year, group=year))
+```
+
+```{r plot PAR, echo=FALSE, message=FALSE}
+# PAR - full time series
+plot_ly(data = cr1000, x = ~Timestamp, y = ~PPFD_1_1_1, name = 'Incoming PAR', type = 'scatter', mode = 'lines') %>%
+  add_trace(y = ~PPFDR_1_1_1, name = 'Outgoing PAR', mode = 'lines')
+
+# PAR - by year
+ggplot(data = cr1000, mapping = aes(x = DOY, y = PPFD_1_1_1, na.rm = TRUE)) +
+  geom_line(aes(colour=year, group=year))
+
+ggplot(data = cr1000, mapping = aes(x = DOY, y = PPFDR_1_1_1, na.rm = TRUE)) +
+  geom_line(aes(colour=year, group=year))
+```
+
+```{r plot PA, echo=FALSE, message=FALSE}
+# PA - full time series from CR1000
+plot_ly(data = cr1000, x = ~Timestamp, y = ~PA_EC_AIR, name = 'PA_EC_AIR', type = 'scatter', mode = 'lines') %>%
+  add_trace(y = ~PA_1_1_1, name = 'PA 2M', mode = 'lines')
+```
+
+```{r plot PRECIP, echo=FALSE, message=FALSE}
+# PRECIP - full time series
+plot_ly(data = cr1000, x = ~Timestamp, y = ~P_1_1_1, name = 'PRECIP', type = 'scatter', mode = 'lines') 
+
+# PRECIP - by year
+ggplot(data = cr1000, mapping = aes(x = DOY, y = P_1_1_1, name = 'PRECIP', na.rm = TRUE)) +
+  geom_line(aes(colour=year, group=year))
+```
+
+```{r plot WTH, echo=FALSE, message=FALSE}
+# WTH - full time series - look into further using Johannes' code!
+#plot_ly(data = cr1000, x = ~Timestamp, y = ~WTH, type = 'scatter', mode = 'lines') 
+
+# WTH - by year
+#ggplot(data = cr1000, mapping = aes(x = DOY, y = WTH, na.rm = TRUE)) +
+#  geom_line(aes(colour=year, group=year))
+```
+
+
+```{r plot SW, echo=FALSE, message=FALSE}
+# SW - full time series
+plot_ly(data = cr1000, x = ~Timestamp, y = ~SWIN_1_1_1, name = 'SHORTWAVE_IN', type = 'scatter', mode = 'lines') %>%
+  add_trace(y = ~SWOUT_1_1_1, name = 'SHORTWAVE_OUT', mode = 'lines')
+
+# SW - by year
+ggplot(data = cr1000, mapping = aes(x = DOY, y = SWIN_1_1_1, na.rm = TRUE)) +
+  geom_line(aes(colour=year, group=year))
+
+ggplot(data = cr1000, mapping = aes(x = DOY, y = SWOUT_1_1_1, na.rm = TRUE)) +
+  geom_line(aes(colour=year, group=year))
+```
+
+```{r plot LW, echo=FALSE, message=FALSE}
+# LW - full time series
+plot_ly(data = cr1000, x = ~Timestamp, y = ~LWIN_1_1_1, name = 'LONGWAVE_IN', type = 'scatter', mode = 'lines') %>%
+  add_trace(y = ~LWOUT_1_1_1, name = 'LONGWAVE_OUT', mode = 'lines')
+
+# LW - by year
+ggplot(data = cr1000, mapping = aes(x = DOY, y = LWIN_1_1_1, na.rm = TRUE)) +
+  geom_line(aes(colour=year, group=year))
+
+ggplot(data = cr1000, mapping = aes(x = DOY, y = LWOUT_1_1_1, na.rm = TRUE)) +
+  geom_line(aes(colour=year, group=year))
+```
+
+```{r plot RH, echo=FALSE, message=FALSE}
+# RH - full time series
+plot_ly(data = cr1000, x = ~Timestamp, y = ~RH_1_1_1, name = '2 m', type = 'scatter', mode = 'lines') %>%
+  add_trace(y = ~RH_1_2_1, name = '3.5M', mode = 'lines')
+
+# RH - by year
+ggplot(data = cr1000, mapping = aes(x = DOY, y = RH_1_1_1, na.rm = TRUE)) +
+  geom_line(aes(colour=year, group=year))
+
+ggplot(data = cr1000, mapping = aes(x = DOY, y = RH_1_2_1, na.rm = TRUE)) +
+  geom_line(aes(colour=year, group=year))
+```
+
+```{r plot SHFP, echo=FALSE, message=FALSE}
+# SHFP - full time series
+plot_ly(data = cr1000, x = ~Timestamp, y = ~SHF_1_1_1, name = 'SHFP 1', type = 'scatter', mode = 'lines') %>%
+  add_trace(y = ~SHF_2_1_1, name = 'SHFP 2', mode = 'lines') %>%
+  add_trace(y = ~SHF_3_1_1, name = 'SHFP 3', mode = 'lines')
+
+# SHFP - by year
+ggplot(data = cr1000, mapping = aes(x = DOY, y = SHF_1_1_1, na.rm = TRUE)) +
+  geom_line(aes(colour=year, group=year))
+
+ggplot(data = cr1000, mapping = aes(x = DOY, y = SHF_2_1_1, na.rm = TRUE)) +
+  geom_line(aes(colour=year, group=year))
+
+ggplot(data = cr1000, mapping = aes(x = DOY, y = SHF_3_1_1, na.rm = TRUE)) +
+  geom_line(aes(colour=year, group=year))
+```
+
+```{r plot TS, echo=FALSE, message=FALSE}
+# TS - full time series
+plot_ly(data = cr1000, x = ~Timestamp, y = ~TS_1_1_1, name = 'TS-1_5 cm', type = 'scatter', mode = 'lines') %>%
+  add_trace(y = ~TS_1_2_1, name = 'TS-1_10 cm', mode = 'lines') %>%
+  add_trace(y = ~TS_1_3_1, name = 'TS-1_20 cm', mode = 'lines') %>%
+  add_trace(y = ~TS_1_4_1, name = 'TS-1_50 cm', mode = 'lines')
+
+plot_ly(data = cr1000, x = ~Timestamp, y = ~TS_2_1_1, name = 'TS-2_5 cm', type = 'scatter', mode = 'lines') %>%
+  add_trace(y = ~TS_2_2_1, name = 'TS-2_10 cm', mode = 'lines') %>%
+  add_trace(y = ~TS_2_3_1, name = 'TS-2_20 cm', mode = 'lines') %>%
+  add_trace(y = ~TS_2_4_1, name = 'TS-2_50 cm', mode = 'lines')
+# TS - by year
+ggplot(data = cr1000, mapping = aes(x = DOY, y = TS_1_1_1, na.rm = TRUE)) +
+  geom_line(aes(colour=year, group=year))
+ggplot(data = cr1000, mapping = aes(x = DOY, y = TS_2_1_1, na.rm = TRUE)) +
+  geom_line(aes(colour=year, group=year))
+
+ggplot(data = cr1000, mapping = aes(x = DOY, y = TS_1_2_1, na.rm = TRUE)) +
+  geom_line(aes(colour=year, group=year))
+ggplot(data = cr1000, mapping = aes(x = DOY, y = TS_2_2_1, na.rm = TRUE)) +
+  geom_line(aes(colour=year, group=year))
+
+ggplot(data = cr1000, mapping = aes(x = DOY, y = TS_1_3_1, na.rm = TRUE)) +
+  geom_line(aes(colour=year, group=year))
+ggplot(data = cr1000, mapping = aes(x = DOY, y = TS_2_3_1, na.rm = TRUE)) +
+  geom_line(aes(colour=year, group=year))
+
+ggplot(data = cr1000, mapping = aes(x = DOY, y = TS_1_4_1, na.rm = TRUE)) +
+  geom_line(aes(colour=year, group=year))
+ggplot(data = cr1000, mapping = aes(x = DOY, y = TS_2_4_1, na.rm = TRUE)) +
+  geom_line(aes(colour=year, group=year))
+```
+
+```{r plot TW, echo=FALSE, message=FALSE}
+# WATER TEMP - full time series
+#plot_ly(data = cr1000, x = ~Timestamp, y = ~WATER_TEMP_10CM, name = '10 cm', type = 'scatter', mode = 'lines') %>%
+#  add_trace(y = ~WATER_TEMP_30CM, name = '30 cm', mode = 'lines')
+
+# TW - by year
+#ggplot(data = cr1000, mapping = aes(x = DOY, y = WATER_TEMP_10CM, na.rm = TRUE)) +
+#  geom_line(aes(colour=year, group=year))
+
+#ggplot(data = cr1000, mapping = aes(x = DOY, y = WATER_TEMP_30CM, na.rm = TRUE)) +
+#  geom_line(aes(colour=year, group=year))
+```
+
+```{r plot WS, echo=FALSE, message=FALSE}
+# WS - full time series
+# WATER TEMP - full time series
+#plot_ly(data = cr1000, x = ~Timestamp, y = ~WIND_VELOCITY_CUP, name = 'Cup', type = 'scatter', mode = 'lines') %>%
+#  add_trace(y = ~WIND_VELOCITY_EC2, name = 'EC 2', mode = 'lines')
+
+# WS - by year
+#ggplot(data = cr1000, mapping = aes(x = DOY, y = WIND_VELOCITY_CUP, na.rm = TRUE)) +
+#  geom_line(aes(colour=year, group=year))
+
+#ggplot(data = cr1000, mapping = aes(x = DOY, y = WIND_VELOCITY_EC2, na.rm = TRUE)) +
+#  geom_line(aes(colour=year, group=year))
+```
+
+```{r save output, echo=FALSE, message=FALSE}
+# Exclude EC data when outputting csv
+cr1000 <- select(cr1000, -c(PA_EC_AIR,Wind_Direction_EC,Wind_Velocity_EC,year,DOY))
+# Save csv 
+write.csv(cr1000, paste(rdir,'/met_merged/met_merged.csv',sep=''),row.names=FALSE)
+```

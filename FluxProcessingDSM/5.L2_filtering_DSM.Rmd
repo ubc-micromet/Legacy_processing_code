@@ -1,0 +1,875 @@
+---
+title: "5.L2_filtering"
+author: "Sara Knox"
+date: "11/10/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls())
+
+library(plotly)
+library(readxl)
+library(REddyProc)
+library(tidyverse)
+library(dplyr)
+library(lubridate)
+library(gtools)
+
+# set working directory
+siteID <- 'DSM'
+
+Rdir <- "/Users/ziyi/Library/CloudStorage/GoogleDrive-ziyi.tzuyilu@gmail.com/.shortcut-targets-by-id/1txCh9lZ7VGCujXGvBaJCMVnuxT-65q4K/Micromet Lab/Projects/2021-DSM Delta salt marsh/Flux-tower"
+setwd("/Users/ziyi/Library/CloudStorage/GoogleDrive-ziyi.tzuyilu@gmail.com/.shortcut-targets-by-id/1txCh9lZ7VGCujXGvBaJCMVnuxT-65q4K/Micromet Lab/Projects/2021-DSM Delta salt marsh/FluxProcessingDSM")
+
+knitr::opts_knit$set(root.dir = Rdir)
+
+#```
+
+
+#```{r Load non-filtered data, echo=FALSE, include=FALSE}
+input<-read.csv(paste(Rdir,'/Flux_data/',siteID,'_L1.csv',sep=''))
+input$DATE<-as.POSIXct(input$DATE,format="%Y-%m-%d %H:%M:%S", tz = "UTC")
+
+# Define new data frame
+Data_QAQC<-input
+```
+
+```{r Define L2 filters, echo=FALSE, include=FALSE}
+pitch_max <- 7 #[deg]
+pitch_min <- -7 #[deg]
+# WD -> ADD LATER!
+qc_flag <- 1 #[#]
+w.ts_cov_max <- 0.5 #[m+1K+1s-1]
+ts_var_max <- 3 #[K+2]
+mean_value_RSSI_LI.7200_min <- 50 #[#] % CONFIRM
+h2o_flux_min <- -2 #[mmol+1s-1m-2]
+h2o_flux_max <- 15 #[mmol+1s-1m-2]
+h2o_var_max <- 20
+h2o_mean_max <- 2000 #[mmol/m3]
+co2_mean_min <- 12 #[mmol/m3]
+co2_var_max <- 100
+co2_flux_max <- 50 #[µmol+1s-1m-2]
+co2_flux_min <- -60 #[µmol+1s-1m-2]
+rssi_77_mean_min <- 20 #[#] 
+ch4_mean_min <- 1.7 # [ppm]
+ch4_var_max <- 0.0005
+ch4_flux_min <- -0.2 #[µmol+1s-1m-2]
+ch4_flux_max <- 0.7 #[µmol+1s-1m-2]
+ustar_max <- 1.2
+wind_max <- 330 #degrees - added 14/12/20 - M.Nyberg
+wind_min <- 30 #degrees - added 14/12/20 - M.Nyberg
+
+
+# Plot filtering variable of interest to check values
+#plot_ly(data = Data_QAQC, x = ~DATE, y = ~co2_var, name = 'pitch', type = 'scatter', mode = 'line') %>%
+# layout(yaxis = list(range = c(-1, 1))) %>% 
+#  toWebGL()
+
+
+```
+
+```{r Create flags (with the exception of the ustar flag), echo=FALSE, include=FALSE}
+Data_QAQC$badrot <- ifelse(input$pitch > pitch_max | input$pitch < pitch_min,1,0)
+
+Data_QAQC$badt <- ifelse(abs(input$w.ts_cov) > w.ts_cov_max | input$ts_var > ts_var_max | input$qc_H > qc_flag,1,0)
+
+Data_QAQC$badq <- ifelse(input$h2o_flux < h2o_flux_min | input$h2o_flux > h2o_flux_max | input$h2o_var > h2o_var_max | input$h2o_mean > h2o_mean_max | input$mean_value_RSSI_LI.7200 < mean_value_RSSI_LI.7200_min | input$qc_LE > qc_flag,1,0)
+
+Data_QAQC$badc <- ifelse(input$co2_flux < co2_flux_min | input$co2_flux > co2_flux_max | input$co2_var > co2_var_max | input$co2_mean < co2_mean_min | input$mean_value_RSSI_LI.7200 < mean_value_RSSI_LI.7200_min | input$qc_co2_flux > qc_flag,1,0)
+
+Data_QAQC$badm <- ifelse(input$ch4_flux < ch4_flux_min | input$ch4_flux > ch4_flux_max | input$ch4_var > ch4_var_max | input$ch4_mean < ch4_mean_min | input$rssi_77_mean < rssi_77_mean_min | input$qc_ch4_flux > qc_flag,1,0)
+
+Data_QAQC$badwind <- ifelse(input$wind_dir > wind_max | input$wind_dir < wind_min,1,0) #added 14/12/20 - M.Nyberg
+```
+
+```{r Filter relevant CO2 variables to run ustar filtering next, echo=FALSE, warning=FALSE}
+Data_QAQC$co2_flux[Data_QAQC$badc == 1] <- NA
+
+# Plot unfiltered & filtered CO2 data
+#plot_ly(data = input, x = ~DATE, y = ~co2_flux, name = 'original', 
+#        type = 'scatter', mode = 'markers',marker = list(size = 4)) %>%
+#  add_trace(data = Data_QAQC, x = ~DATE, y = ~co2_flux, 
+#            name = 'filtered', mode = 'markers') %>% 
+#  toWebGL()
+
+
+cols    <- c( "c1" = "#0072BD", "c2" = "#D95319" )
+ggplot()+
+  geom_point(data=input, aes(x=DATE, y=co2_flux,color="c1"),size=0.4) + 
+  geom_point(data=Data_QAQC, aes(x=DATE, y=co2_flux,color="c2"),size=0.4)+ 
+  scale_color_manual(breaks = c("c1", "c2"), values = cols, labels = c("Original", "Filtered"))
+  
+  
+
+
+# Plot only unfiltered data
+#plot_ly(data = Data_QAQC, x = ~DATE, y = ~co2_flux, name = 'original', 
+#        type = 'scatter', mode = 'markers',marker = list(size = 4)) %>% 
+#  toWebGL()n
+ggplot(Data_QAQC,aes(DATE,co2_flux))+
+  geom_point(colour="#0072BD", size=0.8, alpha=1)
+```
+
+```{r Prepare data for ustar filtering using REddyProc, echo=FALSE, include=FALSE}
+
+# Loading biomet data
+
+# 07/07/2021 - Darian Ng
+# For integrated biomet outputs from Eddypro (i.e. licor): Instead of reading met_merged biomet csv, load each biomet file from EP_outputs and compile them into a dataframe. 
+# POSSIBLE ISSUE: list.files(path=path,pattern="biomet") sometimes won't recognize each biomet file as a unique list element.
+# Original: met <- read.csv(paste('./met_data/met_merged/','met_corrected_gapfilledBB2.csv',sep=""),sep=",",header=TRUE,dec=".")
+met.files <- list.files(path = paste(Rdir,"/EP_outputs",sep=""), pattern = "biomet")
+met <- data.frame()
+
+# Compiling into dataframe
+for(i in 1:length(met.files)) {
+	# Get header names
+	names_temp <- names(read.csv(paste(Rdir,"/EP_outputs/",met.files[i],sep=""),skip=0,sep=",",header=TRUE,dec="."))
+	
+	# Fix variable name (Before 2021-Dec-02): "DO_99_1_1" -> "DOperc_99_1_1" 
+	names_temp[names_temp=="DO_99_1_1"] <- "DOperc_1_1_1"
+	
+	# Load data & apply header names
+	temp <- read.csv(paste(Rdir,"/EP_outputs/",met.files[i],sep=""),skip=2,header=FALSE) 
+	#skip=3 means skip the first 3 rows of the file
+	names(temp) <- names_temp
+	
+	# Create time information
+	sp <-str_split_fixed(temp$date,"-",2)
+	temp$year<-as.numeric(sp[,1])
+	temp$yearDOY<-temp$year*1000+temp$DOY
+	  
+	# Water measurements before 2021-Dec-02 16:00 should be NA
+	temp$COND_1_1_1[temp$yearDOY<2021336.6] <- -9999
+	temp$DO_1_1_1[temp$yearDOY<2021336.6] <- -9999
+	temp$DOperc_1_1_1[temp$yearDOY<2021336.6] <- -9999
+	temp$pH_1_1_1[temp$yearDOY<2021336.6] <- -9999
+	temp$TW_1_1_1[temp$yearDOY<2021336.6] <- -9999
+	temp$WL_1_1_1[temp$yearDOY<2021336.6] <- -9999
+		
+	# Append to file
+	met <- smartbind(met,temp, fill = "NA")
+	
+}
+
+# Formatting met date as yyyy-mm-dd hh:mm:ss to include time and adding "Year" and "hour" columns
+for(i in 1:length(met$date)) {
+  time <- met$time[i]
+  met$date[i] <- paste(met$date[i],time)
+  
+  Yr <- as.numeric(substr(met$date[i],start=1,stop=4))
+  Hr <- as.numeric(substr(met$time[i],start=1,stop=2))
+  
+  Min <- substr(met$time[i],start=4,stop=5)
+  if (Min == "30") {
+    Hr <- Hr+0.5
+  } 
+
+  met$year[i] <- Yr
+  met$DOY[i] <- as.numeric(format(as.POSIXlt(met$date[i]),"%j"))
+  met$hour[i] <- Hr
+
+}
+
+# Creating columns for new & renamed variables: 
+# (NR) net radiation, (es) saturated vapor pressure, VPD, (G) mean Soil Heat Flux, (AE) available energy
+met$NR <- met$RN_1_1_1
+met$NR[met$NR == -9999] <- NA
+met$G<-rowMeans(met[,grep('SHF_',names(met))],na.rm = TRUE) 
+met$AE<-met$NR-met$G 
+    Tair <- met$TA_1_1_1 - 273.15 # Converting air temp from K to Celsius
+met$es <- 0.611*exp(17.502*Tair/(Tair+240.97))
+met$VPD <- met$es*(1-(met$RH_1_1_1/100))
+met$VPD[met$VPD<0|met$VPD>30] <- NA
+# Tair=50&RH=0, max_VPD=12.36kPa -> upper bound for VPD correction is set as 30 (kPa)
+
+met$Timestamp<-as.POSIXct(paste(met$date, met$time), format="%Y-%m-%d %H:%M", tz = "Etc/GMT+8")
+
+####
+# post-process data (exclude outliers) -> what we did in BB_webplot.m
+###
+# NOTE: Not convert temperature unit from K to degree-C
+
+# met0 <- met #(raw data) 
+# met1 <- met #(after de-outlier)
+# (1) Time Shift Correction (fixed at 2021-Nov-11 09:30 PST)            
+  tsc <- which(met$Timestamp<="2021-11-11 09:30")
+  #met[1:tail(tsc,1)-1,3:ncol(met)] <- met[2:tail(tsc,1),3:ncol(met)] # bring data (before 2021-Nov-11 09:30am) forward by 30min
+  #met[tail(tsc,1),3:ncol(met)] <- rep(-9999,ncol(met)-1)
+  mcol <- match(names(met)[!names(met) %in% c('date','time','DOY','year','yearDOY','hour','Timestamp')],names(met))
+  met[1:tail(tsc,1)-1,mcol] <- met[2:tail(tsc,1),mcol] # bring data (before 2021-Nov-11 09:30am) forward by 30min
+  met[tail(tsc,1),mcol] <- rep(-9999,ncol(met)-7)
+
+# (2) Installation time (Blocking off values before installation)
+  # CNR4, 2021-Sep-16 17:00 PST
+  pv    <- match(c("SWIN_1_1_1","SWOUT_1_1_1","LWIN_1_1_1","LWOUT_1_1_1","ALB_1_1_1","Tc_1_1_1"),names(met)) # target variables
+  UNINS <- which(met$Timestamp<="2021-09-16 17:00")
+  met[UNINS,pv]<- -9999
+  
+  # PARin/out, 2021-Sep-16 17:00 PST
+  pv    <- match(c("PPFD_1_1_1","PPFDR_1_1_1"),names(met)) # target variables
+  UNINS <- which(met$Timestamp<="2021-09-16 17:00")
+  met[UNINS,pv]<- -9999
+  
+  # water probe (Manta+20), 2021-Dec-02 14:00 PST
+  pv    <- match(c("TW_1_1_1","COND_1_1_1","DOperc_1_1_1","DO_1_1_1","ORP_1_1_1","WL_1_1_1"),names(met)) # target variables
+  UNINS <- which(met$Timestamp<="2021-12-02 14:00")
+  met[UNINS,pv]<- -9999
+
+# (3) Basic filtering
+  met$PA_1_1_1[met$PA_1_1_1<95] <- -9999
+  
+  ## correct unreasonable values (Added 2022/07/13)
+  met$TA_1_1_1[met$TA_1_1_1>373.15|met$TA_1_1_1<173.15]  <- -9999
+  met$TA_1_2_1[met$TA_1_2_1>373.15|met$TA_1_2_1<173.15]  <- -9999
+  
+  met$TS_1_1_1[met$TS_1_1_1>373.15|met$TS_1_1_1<173.15]  <- -9999
+  met$TS_1_2_1[met$TS_1_2_1>373.15|met$TS_1_2_1<173.15]  <- -9999
+  met$TS_1_3_1[met$TS_1_3_1>373.15|met$TS_1_3_1<173.15]  <- -9999
+  met$TS_1_4_1[met$TS_1_4_1>373.15|met$TS_1_4_1<173.15]  <- -9999
+  met$TS_2_1_1[met$TS_2_1_1>373.15|met$TS_2_1_1<173.15]  <- -9999
+  met$TS_2_2_1[met$TS_2_2_1>373.15|met$TS_2_2_1<173.15]  <- -9999
+  met$TS_2_3_1[met$TS_2_3_1>373.15|met$TS_2_3_1<173.15]  <- -9999
+  met$TS_2_4_1[met$TS_2_4_1>373.15|met$TS_2_4_1<173.15]  <- -9999
+  
+  met$SWIN_1_1_1[met$SWIN_1_1_1<0]   <- 0
+  met$SWOUT_1_1_1[met$SWOUT_1_1_1<0] <- 0
+  met$PPFD_1_1_1[met$PPFD_1_1_1<0]   <- 0
+  met$PPFD_2_1_1[met$PPFD_2_1_1<0]   <- 0
+  met$PPFDR_1_1_1[met$PPFDR_1_1_1<0] <- 0
+  met$PPFDD_1_1_1[met$PPFDD_1_1_1<0] <- 0
+  
+  met$NDVI_1_1_1[abs(met$NDVI_1_1_1)>1]  <- -9999
+  met$PRI_1_1_1[abs(met$PRI_1_1_1)>1]  <- -9999
+  
+  met$WL_1_1_1[met$WL_1_1_1>5] <- -9999 # WL unit: m
+  
+# (4) special correction
+  # Soil heat flux scale correction (incorrect installation: 2021-Aug-25 ~ Sep-09  PST)
+  tcb <- "2021-08-24 15:30" # begin of the period needs to be corrected
+  tce <- "2021-09-09 12:30" # end of the period needs to be corrected
+  trb <- "2021-09-18 15:30" # begin of reference period
+  tre <- "2021-09-27 12:30" # end of reference period
+  
+  pc <- which(met$Timestamp>=tcb & met$Timestamp<=tce)  # data need to be corrected
+  pr <- which(met$Timestamp>=trb & met$Timestamp<=tre)  # data serve as reference
+  pv <- which(grepl("SHF_",names(met))==TRUE) # target variables: SHF_?_1_1
+  
+  # data1: to be corrected; data2: reference
+  data1 <- met[pc,pv];  max1 <- max(data1); min1 <- min(data1);  n1 <- (data1-min1)/(max1-min1);    
+  data2 <- met[pr,pv];  max2 <- max(data2); min2 <- min(data2);   n2 <- (data2-min2)/(max2-min2);
+  # scaling coefficients (a: slope, b:intercept)
+  a <- max2-min2; b <- min2;
+  # data correction
+  n1c <- n1*a+b;
+  met[pc,pv] <- n1c;  
+  
+  # Unreasonable pH & ORP 
+    # (1) 2022-Apr-23 12:00 ~ Jun-25 15:00 PST
+    # (2) 2022-Jul-02 20:00 ~ Jul-27 13:30 PST
+    # (3) 2022-Jul-29 10:00 ~ Aug-30 13:00 PST
+    # (4) 2022-Sep-09 00:00 ~ Sep-19 12:30 PST
+  pv <- match(c("pH_1_1_1","ORP_1_1_1"),names(met)) # target variables
+  pd <- which(met$Timestamp>="2022-04-23 12:00" & met$Timestamp<="2022-06-25 15:00");  met[pd,pv]<- -9999
+  pd <- which(met$Timestamp>="2022-07-02 20:00" & met$Timestamp<="2022-07-27 13:30");  met[pd,pv]<- -9999
+  pd <- which(met$Timestamp>="2022-07-29 10:00" & met$Timestamp<="2022-08-30 13:00");  met[pd,pv]<- -9999
+  pd <- which(met$Timestamp>="2022-09-09 00:00" & met$Timestamp<="2022-09-19 12:30");  met[pd,pv]<- -9999
+  
+  # Unreasonable WTH
+  pv <- match(c("WL_1_1_1"),names(met))
+  
+# (5) Regular maintenance 
+  # water probe
+  wpv <- match(c("TW_1_1_1","pH_1_1_1","COND_1_1_1","DOperc_1_1_1",
+                 "DO_1_1_1","ORP_1_1_1","WL_1_1_1"),names(met)) # target variables
+  prm <- which(met$Timestamp>="2022-06-25 09:30" & met$Timestamp<="2022-06-25 10:30");  met[prm,wpv]<- -9999
+  prm <- which(met$Timestamp>="2022-08-30 10:15" & met$Timestamp<="2022-08-30 12:30");  met[prm,wpv]<- -9999
+  prm <- which(met$Timestamp>="2022-09-15 08:50" & met$Timestamp<="2022-09-19 13:30");  met[prm,wpv]<- -9999
+  prm <- which(met$Timestamp>="2022-09-30 10:30" & met$Timestamp<="2022-09-30 11:30");  met[prm,wpv]<- -9999
+  
+  # NDVI & PRI (2022-Apr-26 00:00~ 2022-May-30 09:00 PST, cable issue)
+  pv <- match(c("REDin_1_1_1","REDout_1_1_1","NIRin_1_1_1","NIRout_1_1_1","NDVI_1_1_1",
+                "nm532in_1_1_1","nm532out_1_1_1","nm570in_1_1_1","nm570out_1_1_1","PRI_1_1_1"),names(met)) # target variables
+  UNINS <- which(met$Timestamp>="2022-04-26 00:00" & met$Timestamp<="2022-05-30 09:00")
+  met[UNINS,pv]<- -9999
+  
+# (6) Linear regression (convert relative WTH to absolute WTH, unit:m)
+  mWTHd <- read_csv(paste(Rdir,'/met_data/WTH/MeasuredWTH_',siteID,'.csv',sep=""),show_col_types = FALSE)
+  mWTHd$WaterTableHeight_cm <- 100 - mWTHd$MeasuredLength
+  kp    <- max(which(is.na(mWTHd[,1])==F)) # only keep non-NA data
+  mWTHd <- mWTHd[1:kp,]                    # all data should be round to 0/30 min format manually, e.g. 10:16 -> 10:30
+  mt    <- as.POSIXct(as.POSIXct(paste(paste(mWTHd$yyyy,mWTHd$mm,mWTHd$dd,sep="-"),
+                                paste(mWTHd$HH,mWTHd$MM,sep=":")),format="%Y-%m-%d %H:%M", tz = "Etc/GMT+8"))
+  my    <- as.numeric(unlist(mWTHd[,8]))/100  # my: manually measured WTH, unit: m -> cm
+  mp    <- match(mt,met$Timestamp)
+  mx    <- met$WL_1_1_1[mp]                   # mx: automated measured WTH (relative), unit: m
+  mWTHd$rawWTH_cm <- mx*100
+  
+  # exclude NA data
+  PNNA <- which(abs(mx)!=9999)
+  mx <- mx[PNNA]
+  my <- my[PNNA]
+  mp <- mp[PNNA]
+  
+  if (length(mx)==1){
+    met$WL_1_1_1[met$WL_1_1_1==-9999] <- NA
+    WLc<-(mx-(mWTHd$WaterTableHeight_cm/100)); met$WL_1_1_1 <- (met$WL_1_1_1-WLc); 
+    met$WL_1_1_1[is.na(met$WL_1_1_1)]  <- -9999
+    mWTHd$slope[nrow(mWTHd)]     <- 1
+    mWTHd$intercept[nrow(mWTHd)] <- WLc
+  } else {
+    p<-lm(my ~ mx) # p=(intercept, slope), my = mx*p$coefficients[2]+p$coefficients[1]
+    met$WL_1_1_1[met$WL_1_1_1==-9999] <- NA
+    met$WL_1_1_1 <- met$WL_1_1_1*p$coefficients[2]+p$coefficients[1]
+    met$WL_1_1_1[is.na(met$WL_1_1_1)]  <- -9999
+    mWTHd$slope[nrow(mWTHd)]     <- p$coefficients[2]
+    mWTHd$intercept[nrow(mWTHd)] <- p$coefficients[1]
+  }
+  
+  # Output coefficients
+  write.csv(mWTHd,paste(Rdir,'/met_data/WTH/MeasuredWTH_',siteID,'.csv',sep=""), row.names = FALSE)
+
+# plot(met$WL_1_1_1,ylim = c(0,3))
+# a <- met$WL_1_1_1
+# a[a==-9999] <- NA
+# plot(a*100,ylim = c(-100,100))
+# max(a,na.rm = T)
+# min(a,na.rm = T)
+
+###
+# GAPFILLING: Checking for gaps in half-hourly data, then filling with NA in a new dataframe.
+###
+
+# Ordering data by date/time
+data.ordered<-met[order(met$Timestamp, decreasing = FALSE ),]
+
+data.ordered[1,1:5]
+data.ordered[nrow(data.ordered),1:5]
+
+# Generating new data frame and gap-filling with NA
+
+ts<-data.ordered
+
+#to estimate necessary parameters to generate the new empty data frame with complete rows 
+beginning<-as.numeric(ts$Timestamp[1])      # Finding number representing the first data of our time series
+as.POSIXct(beginning,origin="1970-01-01 00:00:00",tz="Etc/GMT+8") # to confirm that the beginning is the right one
+ts$Timestamp[1]
+
+Ystart<-as.integer(as.character(ts[1,ncol(ts)], "%Y"))      # Starting year
+Yend<-as.integer(as.character(ts[nrow(ts),ncol(ts)], "%Y")) # End  year
+Dstart<-as.POSIXlt(ts[1,ncol(ts)])$yday # Starting date
+Dend<-as.POSIXlt(ts[nrow(ts),ncol(ts)])$yday+1 # End date
+
+Ndays <- as.numeric((difftime(ts$Timestamp[nrow(ts)],ts$Timestamp[1], "Etc/GMT+8",
+                              units = c("days"))), units="days")
+
+Tsteps<-beginning+seq(from=0,to=((Ndays)*(60*60*24)),by=(30*60)) 
+# 30 minute steps in seconds from the beginning date to Ndays +1 
+# (to ensure all measured data are included in the new file)
+DATE<-as.POSIXct(Tsteps,origin="1970-01-01 00:00:00",tz="Etc/GMT+8") # Turning steps back into dates
+
+# CHECK start and end times between the two files are equal.
+DATE[1] == ts$Timestamp[1]
+DATE[length(DATE)] == ts$Timestamp[length(ts$Timestamp)]
+
+#GENERATING A NEW DATA FRAME WITH CONTINUOUS TIME STEPS and data from THE ORIGINAL ONE
+cont.DS<-as.data.frame(DATE)
+cont.DS[,c("DATE",names(ts)[1:(length(names(ts)))-1])]<-NA
+cont.DS$DATE<-DATE
+
+#FILLING THE NEW DATAFRAME WITH DATA FROM THE ORIGINAL DATA FRAME 
+for(i in 2:ncol(cont.DS)){  
+  cont.DS[,i]<-ts[pmatch(cont.DS$DATE,ts$Timestamp),i-1]  
+  #pmatch look for the observation rows when time columns of both (old and new) dataframes match
+} 
+
+# Adding local time
+
+# date_loca <- ymd_hms(cont.DS$DATE, tz="America/Winnipeg") # For Manitoba sites
+# date_local<-as.POSIXlt(date_loca,tz="America/Winnipeg") # For Manitoba sites
+
+date_loca <- ymd_hms(cont.DS$DATE, tz="America/Vancouver") # For tidal sites
+date_local<-as.POSIXlt(date_loca,tz="America/Vancouver") # For tidal sites
+
+for (i in 1:nrow(cont.DS)){
+  cont.DS$Year_local[i]<-as.integer(as.character(date_local[i],"%Y"))
+  cont.DS$jday_local[i]<-as.POSIXlt(date_local[i])$yday+1
+  cont.DS$month_local[i]<-as.numeric(format(date_local[i],"%m"))
+  cont.DS$hour_local[i]<-as.integer(as.character(date_local[i],"%H"))
+  cont.DS$min_local[i]<-sprintf("%02s",as.integer(as.character(date_local[i],"%M")))  
+  #sprintf function converts 0 in 00 to be pasted with hour to generate local time
+  cont.DS$time_local[i]<-paste(cont.DS$hour_local[i],cont.DS$min_local[i],sep=":")
+  day_portion<-ifelse(cont.DS$min_local[i]=="00",as.numeric(cont.DS$hour_local[i]),as.numeric(cont.DS$hour_local[i])+0.5)
+  cont.DS$DOY_local[i]<-cont.DS$jday_local[i]+(day_portion*2*0.02)
+}
+
+# Replacing -9999 by NA
+cont.DS[cont.DS == -9999] <- NA
+
+met <- cont.DS
+
+# Match met and flux time series
+met$date <- as.POSIXct(met$date, Origin = "1970-01-01 00:00:00", tz = "UTC")
+
+met$DOY <- as.numeric(format(met$DATE,'%j'))
+
+# Plot met data if needed
+# Eddypro biomet variable reference list: https://www.licor.com/env/support/EddyPro/topics/biomet-data-format.html, https://www.licor.com/env/support/Biomet-System/topics/viewing-logged-data.html
+
+#plot_ly(data = met, x = ~date, y = ~TA_1_1_1, type = 'scatter', mode = 'lines') %>% 
+#  toWebGL()
+ggplot(met, aes(date,TA_1_1_1))+geom_point(colour="#0072BD", size=0.8, alpha=0.8)+geom_line()
+
+Data_QAQC$DATE[1]
+met$date[1]
+
+Data_QAQC$obs<-c(1:nrow(Data_QAQC))
+met$obs1 <- c(1:nrow(met)) #Testing because 'obs' column doesn't start at 1 for some reason
+
+start_date<-Data_QAQC$DATE[1]
+
+if (Data_QAQC$DATE[nrow(Data_QAQC)]>met[nrow(met),1]) { end_date<-met[nrow(met),1] 
+}else{
+  end_date<-Data_QAQC$DATE[nrow(Data_QAQC)]
+}
+
+start_date  #start of matching period
+end_date    #end of matching period
+
+F_start<-Data_QAQC[Data_QAQC$DATE==start_date,match('obs',names(Data_QAQC))] 
+F_end<-Data_QAQC[Data_QAQC$DATE==end_date,match('obs',names(Data_QAQC))]
+
+start_bool <- met$date==start_date
+end_bool <- met$date == end_date
+
+M_start<-met[which(start_bool==TRUE),match('obs1',names(met))] #TEST
+M_end<-met[which(end_bool==TRUE),match('obs1',names(met))] #TEST
+
+M_end-M_start==F_end-F_start   #If everything goes well this should be TRUE 
+
+# # Create output file to use in REddyProc for ustar filtering
+# output <- cbind(met[M_start:M_end,match(c('year','jday','hour_dec','AIR_TEMP_2M','SHORTWAVE_IN'),names(met))], Data_QAQC[F_start:F_end,match(c('co2_flux','u.'),names(Data_QAQC))])
+
+output <- cbind(met[M_start:M_end,match(c('year','DOY','hour','TA_1_1_1','SWIN_1_1_1'),names(met))], Data_QAQC[F_start:F_end,match(c('co2_flux','u.'),names(Data_QAQC))])
+
+# rounding DOY down
+output$DOY <- floor(output$DOY)
+
+
+# Reorder & rename columns
+output <- output[c("year","DOY", "hour","co2_flux","SWIN_1_1_1","TA_1_1_1","u.")]
+names_output<-c('Year','DoY','Hour','NEE','Rg','Tair','Ustar')
+names(output)<-names_output
+  
+#Adding the units row
+UNITS<-list('-','-','-','umol_m-2_s-1','Wm-2','degC','ms-1')
+
+output <- rbind(UNITS,output)
+
+#Transforming missing values in -9999:
+output[is.na(output)]<--9999
+
+
+
+#Saving the file:
+write.table(output, file = paste(Rdir,'/Flux_data/REddyProc_input/for_ustar_filtering','.txt',sep=''),row.names=FALSE,sep='\t') 
+```
+
+```{r Ustar filtering in REddyProc, echo=FALSE, include=FALSE}
+# Load data
+EddyData.F <- fLoadTXTIntoDataframe(paste(Rdir,'/Flux_data/REddyProc_input/for_ustar_filtering.txt',sep=''))
+
+#Gapfill year and hour NA's
+na_idx = which(is.na(EddyData.F$Hour))
+
+for (idx in na_idx){
+  previous_hour = EddyData.F$Hour[idx-1]
+  previous_day = EddyData.F$DoY[idx-1]
+  previous_year = EddyData.F$Year[idx-1]
+  # Stepping into missing hour for EddyData.F and met
+  if (previous_hour != 23.5) {
+    EddyData.F$Hour[idx] <- previous_hour + 0.5
+    met$hour[idx] <- met$hour[idx-1] +0.5
+  } else{
+    EddyData.F$Hour[idx] <- 0
+    met$hour[idx] <- 0
+  }
+  # Stepping into missing day
+  if (previous_hour == 23.5 & previous_day == 365) {
+    EddyData.F$DoY[idx] <- 1
+    #met$DOY[idx] <- 1
+  } else if (previous_hour == 23.5 & previous_day != 365) {
+    EddyData.F$DoY[idx] <- previous_day + 1
+    #met$DOY[idx] <- met$DOY[idx-1] + 0.0208
+  } else if (previous_hour < 23.5) {
+    EddyData.F$DoY[idx] <- previous_day
+    #met$DOY[idx] <- met$DOY[idx-1] + 0.0208
+  }
+  # Stepping into missing year
+  if (previous_hour == 23.5 & previous_day == 365) {
+    EddyData.F$Year[idx] <- previous_year + 1
+    met$year[idx] <- met$year[idx-1] + 1
+  } else {
+    EddyData.F$Year[idx] <- previous_year
+    met$year[idx] <- met$year[idx-1]
+  }
+}
+
+#######
+# vvvvvvvvvv TEMPORARY !!!!!!!!! REMOVE AFTER JULY 26 WHEN THERE'S 3 MONTH'S DATA!!!!!
+######
+#
+## Spoofing dataframe to fill 3 months of data needed by sEddyProc. Adding 3 months
+#last_idx <- length(EddyData.F$Year)
+#needed_length <- 3*48*31
+#extra_length <- needed_length-last_idx
+#
+#extra_rows<-as.data.frame(c(1:extra_length))
+#extra_rows[,c(names(EddyData.F)[1:(length(names(EddyData.F)))])]<-NA
+#
+## EddyData.F <- rbind(EddyData.F,extra_rows[1:extra_length,2:8])
+#EddyData.F <- rbind(EddyData.F,EddyData.F,EddyData.F)
+
+# for (idx in last_idx:needed_length) {
+#for (idx in last_idx:length(EddyData.F$Year)) {
+#  previous_hour = EddyData.F$Hour[idx-1]
+#  previous_day = EddyData.F$DoY[idx-1]
+#  previous_year = EddyData.F$Year[idx-1]
+#  # Stepping into missing hour
+#  if (previous_hour != 23.5) {
+#    EddyData.F$Hour[idx] <- previous_hour + 0.5
+#  } else{
+#    EddyData.F$Hour[idx] <- 0
+#  }
+#  # Stepping into missing day
+#  if (previous_hour == 23.5 & previous_day == 365) {
+#    EddyData.F$DoY[idx] <- 1
+#  } else if (previous_hour == 23.5 & previous_day != 365) {
+#    EddyData.F$DoY[idx] <- previous_day + 1
+#  } else if (previous_hour < 23.5) {
+#    EddyData.F$DoY[idx] <- previous_day
+#  }
+#  # Stepping into missing year
+#  if (previous_hour == 23.5 & previous_day == 365) {
+#    EddyData.F$Year[idx] <- previous_year + 1
+#  } else {
+#    EddyData.F$Year[idx] <- previous_year
+#  }
+#}
+#######
+# ^^^^^^^^^ TEMPORARY !!!!!!!!! REMOVE AFTER JULY 26 WHEN THERE'S 3 MONTH'S DATA!!!!!
+######
+
+
+# Add time stamp in POSIX time format
+EddyDataWithPosix.F <- fConvertTimeToPosix(EddyData.F, 'YDH',Year.s = 'Year',Day.s = 'DoY',Hour.s = 'Hour')
+
+#EddyProc.C <- sEddyProc$new('YOUNG-CE', EddyDataWithPosix.F,c("NEE","Rg","Tair","Ustar"))
+EddyProc.C <- sEddyProc$new('DSM', EddyDataWithPosix.F,c("NEE","Rg","Tair","Ustar"))
+
+# Single ustar threshold estimate
+uStarTh <- EddyProc.C$sEstUstarThreshold()$uStarTh
+
+# ustar threshold decision: separate for each individual year
+threshold <- uStarTh %>% filter(aggregationMode == "year")
+threshold <- threshold[, c(2,4)]
+years <- threshold[, 1]
+nyears <- length(years)
+
+Data_QAQC$ustar_thr <- rep(0, nrow(Data_QAQC))
+for (i in 1:nyears){
+  Data_QAQC$ustar_thr[year(Data_QAQC$DATE) == years[i]] <- threshold[i, 2]
+}
+```
+
+```{r Plot ustar threshold, echo=FALSE}
+#plot_ly(data = Data_QAQC, x = ~DATE, y = ~ustar_thr, type = 'scatter', mode = 'lines') %>% 
+#  toWebGL()
+ggplot(Data_QAQC,aes(DATE,ustar_thr))+geom_point(colour="#0072BD", size=0.8, alpha=0.8)+geom_line()
+```
+
+```{r Create bad ustar flag, echo=FALSE, warning=FALSE}
+Data_QAQC$badustar <- ifelse(abs(input$u.) < Data_QAQC$ustar_thr | input$u. > ustar_max,1,0)
+
+#plot_ly(data = Data_QAQC, x = ~DATE, y = ~u., name = 'original', type = 'scatter', mode = 'lines') %>%
+#  add_trace(data = Data_QAQC, x = ~DATE[badustar == 1], y = ~u.[badustar == 1], name = 'removed', mode = 'markers') %>% 
+#  toWebGL() 
+
+Data_QAQC_2 <- filter(Data_QAQC, badustar == 1)
+ggplot()+
+  geom_point(data=Data_QAQC, aes(x = DATE, y = u.,color="c1"),size=0.4, alpha=1) + geom_line()+
+  geom_point(data=Data_QAQC_2, aes(x = DATE, y = u.,color="c2"),size=0.4, alpha=1)+ 
+  scale_color_manual(breaks = c("c1", "c2"), values = cols, labels = c("original", "removed"))
+
+```
+
+```{r Now filter everybody - ADD WIND DIRECTION FILTER! & STORAGE TERMS, echo=FALSE, warning=FALSE}
+Data_QAQC$badflux = Data_QAQC$badustar | Data_QAQC$badt | Data_QAQC$badrot | Data_QAQC$badwind
+Data_QAQC$L[Data_QAQC$badflux == TRUE]  <- NA
+Data_QAQC$X.z.d..L[Data_QAQC$badflux == TRUE]  <- NA
+Data_QAQC$co2_flux[Data_QAQC$badflux == TRUE]  <- NA
+Data_QAQC$ch4_flux[Data_QAQC$badflux == TRUE]  <- NA
+Data_QAQC$h2o_flux[Data_QAQC$badflux == TRUE]  <- NA
+Data_QAQC$ET[Data_QAQC$badflux == TRUE]  <- NA
+Data_QAQC$LE[Data_QAQC$badflux == TRUE]  <- NA
+Data_QAQC$H[Data_QAQC$badflux == TRUE]  <- NA
+
+# Filter momentum fluxes for bad rotation angle only
+Data_QAQC$Tau[Data_QAQC$badrot] <- NA
+
+# Bad water fluxes
+Data_QAQC$h2o_flux[Data_QAQC$badq == 1] <- NA
+Data_QAQC$LE[Data_QAQC$badq == 1] <- NA
+Data_QAQC$ET[Data_QAQC$badq == 1] <- NA
+
+# Bad CO2 fluxes
+Data_QAQC$co2_flux[Data_QAQC$badc == 1] <- NA
+
+# Bad CH4 fluxes
+Data_QAQC$ch4_flux[Data_QAQC$badm == 1]  <- NA
+
+# Bad wind direction - added 14/12/20 M.Nyberg
+#Data_QAQC$wind_dir[Data_QAQC$badwind == 1]  <- NA
+
+```
+
+```{r Plot L2 fluxes, echo=FALSE, warning=FALSE}
+# Turbulence
+
+# Add WD eventually
+
+# ustar
+#plot_ly(data = input, x = ~DATE, y = ~u., name = 'original', type = 'scatter', mode = 'line') %>%
+#  add_trace(data = Data_QAQC, x = ~DATE[badustar == 1], y = ~u.[badustar == 1], name = 'filtered', mode = 'markers') %>% 
+#  toWebGL()
+ggplot()+
+  geom_point(data=input, aes(x=DATE, y=u.,color="c1"),size=0.4, alpha=1) + 
+  geom_point(data=Data_QAQC_2, aes(x=DATE, y=u.,color="c2"),size=0.4, alpha=1)+ 
+  scale_color_manual(breaks = c("c1", "c2"), values = cols, labels = c("Original", "Filtered"))
+
+# z/L
+#plot_ly(data = input, x = ~DATE, y = ~X.z.d..L, name = 'original', type = 'scatter', mode = 'line') %>%
+#  add_trace(data = Data_QAQC, x = ~DATE, y = ~X.z.d..L, name = 'retained', mode = 'line') %>%
+#  layout(yaxis = list(range = c(-20, 20))) %>% 
+#  toWebGL()
+ggplot()+
+  geom_point(data=input, aes(x=DATE, y=X.z.d..L ,color="c1"),size=0.4) + 
+  geom_point(data=Data_QAQC, aes(x=DATE, y=X.z.d..L ,color="c2"),size=0.4)+ 
+  scale_color_manual(breaks = c("c1", "c2"), values = cols, labels = c("Original", "Retained"))
+
+# Fluxes
+#plot_ly(data = input, x = ~DATE, y = ~H, name = 'original', type = 'scatter', mode = 'markers', marker = list(size = 3)) %>%
+#  add_trace(data = Data_QAQC, x = ~DATE, y = ~H, name = 'retained', mode = 'markers') %>% 
+#  toWebGL()
+ggplot()+
+  geom_point(data=input, aes(x=DATE, y=H ,color="c1"),size=0.4) + 
+  geom_point(data=Data_QAQC, aes(x=DATE, y=H ,color="c2"),size=0.4)+ 
+  scale_color_manual(breaks = c("c1", "c2"), values = cols, labels = c("Original", "Retained"))
+
+
+#plot_ly(data = input, x = ~DATE, y = ~LE, name = 'original', type = 'scatter', mode = 'markers', marker = list(size = 3)) %>%
+#  add_trace(data = Data_QAQC, x = ~DATE, y = ~LE, name = 'retained', mode = 'markers') %>% 
+#  toWebGL()
+ggplot()+
+  geom_point(data=input, aes(x=DATE, y=LE ,color="c1"),size=0.4) + 
+  geom_point(data=Data_QAQC, aes(x=DATE, y=LE ,color="c2"),size=0.4)+ 
+  scale_color_manual(breaks = c("c1", "c2"), values = cols, labels = c("Original", "Retained"))
+
+
+plot_ly(data = input, x = ~DATE, y = ~co2_flux, name = 'original', type = 'scatter', mode = 'markers', marker = list(size = 3)) %>%
+  add_trace(data = Data_QAQC, x = ~DATE, y = ~co2_flux, name = 'retained', mode = 'markers') %>%
+ layout(yaxis = list(range = c(-40, 30))) %>% 
+  toWebGL()
+#ggplot()+
+#  geom_point(data=input, aes(x=DATE, y=co2_flux ,color="c1"),size=0.4) + 
+#  geom_point(data=Data_QAQC, aes(x=DATE, y=co2_flux ,color="c2"),size=0.4)+ 
+#  scale_color_manual(breaks = c("c1", "c2"), values = cols, labels = c("Original", "Retained"))
+
+
+plot_ly(data = input, x = ~DATE, y = ~ch4_flux*1000, name = 'original', type = 'scatter', mode = 'markers', marker = list(size = 3)) %>%
+  add_trace(data = Data_QAQC, x = ~DATE, y = ~ch4_flux*1000, name = 'retained', mode = 'markers') %>%
+ layout(yaxis = list(range = c(-300, 800))) %>% 
+  toWebGL()
+#ggplot()+
+#  geom_point(data=input, aes(x=DATE, y=ch4_flux*1000 ,color="c1"),size=0.4) + 
+#  geom_point(data=Data_QAQC, aes(x=DATE, y=ch4_flux*1000 ,color="c2"),size=0.4)+ 
+#  scale_color_manual(breaks = c("c1", "c2"), values = cols, labels = c("Original", "Retained"))
+
+# Bad rotation angle
+plot_ly(data = input, x = ~DATE, y = ~pitch, name = 'original', type = 'scatter', mode = 'line') %>%
+  add_trace(data = Data_QAQC, x = ~DATE[badrot == 1], y = ~pitch[badrot == 1], name = 'filtered', mode = 'markers') %>% 
+  toWebGL()
+#ggplot()+
+#  geom_point(data=input, aes(x=DATE, y=pitch ,color="c1"),size=0.4) + 
+#  geom_point(data=Data_QAQC_2, aes(x=DATE, y=pitch ,color="c2"),size=0.4)+ 
+#  scale_color_manual(breaks = c("c1", "c2"), values = cols, labels = c("Original", "Filtered"))
+
+# Wind direction - added 14/12/2020 - M.Nyberg - not sure if this has worked but there are NAs in the Data_QAQC file
+plot_ly(data = input, x = ~DATE, y = ~wind_dir, name = 'original', type = 'scatter', mode = 'line') %>%
+  add_trace(data = Data_QAQC, x = ~DATE[badwind == 1], y = ~wind_dir[badwind == 1], name = 'filtered', mode = 'markers') %>% 
+  toWebGL()
+#ggplot()+
+#  geom_point(data=input, aes(x=DATE, y=wind_dir ,color="c1"),size=0.4) + 
+#  geom_point(data=Data_QAQC_2, aes(x=DATE, y=wind_dir ,color="c2"),size=0.4)+ 
+#  scale_color_manual(breaks = c("c1", "c2"), values = cols, labels = c("Original", "Filtered"))
+
+# Variances
+plot_ly(data = input, x = ~DATE, y = ~ts_var, name = 'original', type = 'scatter', mode = 'line') %>%
+  add_trace(data = Data_QAQC, x = ~DATE[ts_var > ts_var_max], y = ~ts_var[ts_var > ts_var_max], name = 'filtered', mode = 'markers') %>% 
+  toWebGL()
+#Data_QAQC_3 <- filter(Data_QAQC, ts_var > ts_var_max)
+#ggplot()+
+#  geom_point(data=input, aes(x=DATE, y=ts_var ,color="c1"),size=0.4) + 
+#  geom_point(data=Data_QAQC_3, aes(x=DATE, y=ts_var ,color="c2"),size=0.4)+ 
+#  scale_color_manual(breaks = c("c1", "c2"), values = cols, labels = c("Original", "Filtered"))
+
+
+plot_ly(data = input, x = ~DATE, y = ~h2o_var, name = 'original', type = 'scatter', mode = 'line') %>%
+  add_trace(data = Data_QAQC, x = ~DATE[h2o_var > h2o_var_max], y = ~h2o_var[h2o_var > h2o_var_max], name = 'filtered', mode = 'markers') %>% 
+  toWebGL()
+#Data_QAQC_3 <- filter(Data_QAQC, h2o_var > h2o_var_max)
+#if (nrow(Data_QAQC_3)>0) {
+#  ggplot()+
+#  geom_point(data=input, aes(x=DATE, y=h2o_var ,color="c1"),size=0.4) + 
+#  geom_point(data=Data_QAQC_3, aes(x=DATE, y=h2o_var ,color="c2"),size=0.4)+ 
+#  scale_color_manual(breaks = c("c1", "c2"), values = cols, labels = c("Original", "Filtered"))
+#cu}
+
+
+plot_ly(data = input, x = ~DATE, y = ~co2_var, name = 'original', type = 'scatter', mode = 'line') %>%
+  add_trace(data = Data_QAQC, x = ~DATE[co2_var > co2_var_max], y = ~co2_var[co2_var > co2_var_max], name = 'filtered', mode = 'markers') %>%
+  layout(yaxis = list(range = c(-100,10000))) %>% 
+  toWebGL()
+#Data_QAQC_3 <- filter(Data_QAQC, co2_var > co2_var_max)
+#ggplot()+
+#  geom_point(data=input, aes(x=DATE, y=co2_var ,color="c1"),size=0.4) + 
+#  geom_point(data=Data_QAQC_3, aes(x=DATE, y=co2_var ,color="c2"),size=0.4)+ 
+#  scale_color_manual(breaks = c("c1", "c2"), values = cols, labels = c("Original", "Filtered"))
+
+plot_ly(data = input, x = ~DATE, y = ~ch4_var, name = 'original', type = 'scatter', mode = 'line') %>%
+  add_trace(data = Data_QAQC, x = ~DATE[ch4_var > ch4_var_max], y = ~ch4_var[ch4_var > ch4_var_max], name = 'filtered', mode = 'markers') %>%
+  layout(yaxis = list(range = c(-1,1))) %>% 
+  toWebGL()
+#Data_QAQC_3 <- filter(Data_QAQC, ch4_var > ch4_var_max)
+#ggplot()+
+#  geom_point(data=input, aes(x=DATE, y=ch4_var ,color="c1"),size=0.4) + 
+#  geom_point(data=Data_QAQC_3, aes(x=DATE, y=ch4_var ,color="c2"),size=0.4)+ 
+#  scale_color_manual(breaks = c("c1", "c2"), values = cols, labels = c("Original", "Filtered"))
+
+```
+```{r Plot energy balance closure, echo=FALSE, warning=FALSE}
+# Ebal_denominator <- met$NR[M_start:M_end]-met$G[M_start:M_end]
+# 
+# Ebal_numerator <- Data_QAQC$H+Data_QAQC$LE
+# 
+# plot(x = Ebal_denominator, y = Ebal_numerator, xlab="Rn-G",ylab="LE+H")
+# 
+# # calculate EB using slope to fit
+# a<-round(coef(lm(Ebal_numerator~Ebal_denominator))[2],digits=2) #coef(lm(y~x))[2] is the slope of the regression
+# b<-round(coef(lm(Ebal_numerator~Ebal_denominator))[1],digits=2)   
+# r2<-round(summary(lm(Ebal_numerator~Ebal_denominator))$ r.squared,digits=2)
+# 
+# lm_eq<-paste0("y=",a,"x",ifelse(b>0,"+",""),b)
+# R2<-bquote(R^2 == .(r2)) 
+# 
+# abline(0,1)
+# abline(lm(Ebal_numerator~Ebal_denominator),col='grey',lty=2)
+# mtext( lm_eq,side=3,line=-2,at=200,cex=0.9)
+# mtext(R2,side=3,line=-3,at=200,cex=0.9)
+# 
+# # Do diurnal approach - applies equal weight to all times of day
+# 
+# # Find index of first day starting at 00:30
+# ind <- which(Data_QAQC$min_local == 30 & Data_QAQC$hour_local == 0)
+# is <- ind[1]
+# 
+# # Find index of last day ending at 00:00
+# ind <- which(Data_QAQC$min_local == 00 & Data_QAQC$hour_local == 0)
+# ie <- ind[length(ind)]
+# 
+# Ebal_numerator_diel <- Ebal_numerator[is:ie]
+# Ebal_denominator_diel <- Ebal_denominator[is:ie]
+# 
+# Ebal_numerator_diel <- t(matrix(Ebal_numerator_diel, 48, length(Ebal_numerator[is:ie])/48))
+# Ebal_denominator_diel <- t(matrix(Ebal_denominator_diel, 48, length(Ebal_numerator[is:ie])/48))
+# 
+# Ebal_numerator_diurn <- colMeans(x = Ebal_numerator_diel, na.rm = TRUE)
+# Ebal_denominator_diurn = colMeans(x = Ebal_denominator_diel, na.rm = TRUE)
+# 
+# # Compute closure
+# Eclosure = sum(Ebal_numerator_diurn)/sum(Ebal_denominator_diurn);
+# mtext(paste('Diel Avg. Closure = ', round(Eclosure,2)),side=3,line=-4,at=200,cex=0.9)
+```
+
+```{r Save L2 output, echo=FALSE, warning=FALSE}
+write.csv(Data_QAQC,paste(Rdir,'/Flux_data/',siteID,'_L2','.csv',sep=''),row.names=FALSE)   
+```
+
+```{r Now export data for gap-filling and partitioning using REddyProc, echo=FALSE, warning=FALSE}
+#Converting units for the right input file format
+#met$VPD_hPa <- met$VPD*10
+
+# Create output file to use in REddyProc for ustar filtering
+#    add water measurements
+output <- cbind(met[M_start:M_end,match(
+  c('year','DOY','hour','TA_1_1_1','SWIN_1_1_1','RH_1_1_1','VPD','TS_1_1_1',
+    'TS_1_2_1','TS_1_3_1','TS_1_4_1','TS_2_1_1','TS_2_2_1','TS_2_3_1','TS_2_4_1','COND_1_1_1','DO_1_1_1','WL_1_1_1','TW_1_1_1','pH_1_1_1','ORP_1_1_1'),names(met))], 
+               Data_QAQC[F_start:F_end,match(c('co2_flux','ch4_flux','LE','H','u.'),names(Data_QAQC))])
+#,'COND_1_1_1','DO_1_1_1','WL_1_1_1','TW_1_1_1','pH_1_1_1','ORP_1_1_1'
+# VPD_hPa--->VPD
+
+
+
+
+output$TA_1_1_1 <- output$TA_1_1_1-273.15
+
+output$TS_1_1_1 <- output$TS_1_1_1-273.15
+output$TS_1_2_1 <- output$TS_1_2_1-273.15
+output$TS_1_3_1 <- output$TS_1_3_1-273.15
+output$TS_1_4_1 <- output$TS_1_4_1-273.15
+
+output$TS_2_1_1 <- output$TS_2_1_1-273.15
+output$TS_2_2_1 <- output$TS_2_2_1-273.15
+output$TS_2_3_1 <- output$TS_2_3_1-273.15
+output$TS_2_4_1 <- output$TS_2_4_1-273.15
+
+output$DOY <- as.numeric(format(met$DATE,'%j'))
+
+
+## Reorder & rename columns
+#output <- output[c("year", "jday", "hour_dec","co2_flux","ch4_flux","LE","H","SWIN_1_1_1",
+#                   "TA_1_1_1","TS_2_1_1", "RH_1_1_1","VPD_hPa","u.","WL_1_1_1")]
+
+##01/07/2020 - add reps for soil temp
+#output <- output[c("year", "DOY", "hour","co2_flux","ch4_flux","LE","H","SWIN_1_1_1","TA_1_1_1","TS_1_1_1","TS_2_1_1", #'TS_3_1_1', "RH_1_1_1","VPD_hPa","u.")]
+
+names_output<-c('Year','DoY','Hour','Tair','Rg','RH','VPD',# VPD_hPa--->VPD
+                'Ts_1_5cm','Ts_1_10cm','Ts_1_20cm','Ts_1_50cm',
+                'Ts_2_5cm','Ts_2_10cm','Ts_2_20cm','Ts_2_50cm',
+                'Cond','DO','WL','TW','pH','ORP',
+                'NEE','FCH4','LE','H','Ustar')
+#                'Cond','DO','WL','TW','pH','ORP',
+names(output)<-names_output
+
+#Adding the units row
+UNITS<-list('-','-','-','degC','Wm-2','%','hPa',
+            'degC','degC','degC','degC',
+            'degC','degC','degC','degC',
+            'microS/cm','mg/l','m','degC','unitless','mV',
+            'umol_m-2_s-1','umol_m-2_s-1','Wm-2','Wm-2','ms-1')
+#            'microS/cm','mg/l','m','degC','unitless','mV',
+
+
+output <- rbind(UNITS,output)
+
+#Transforming missing values in -9999:
+output[is.na(output)] <- -9999
+
+#Saving biomet file:
+write.csv(met,paste(Rdir,'/met_data/Gapfilled_biomet','.csv',sep=''),row.names=FALSE)   
+
+#Saving REddyProc for ustar filtering file:
+write.table(output, file = paste(Rdir,'/Flux_data/REddyProc_input/for_gap_filling_partitioning',siteID,'.txt',sep=''),row.names=FALSE,sep='\t')   
+```

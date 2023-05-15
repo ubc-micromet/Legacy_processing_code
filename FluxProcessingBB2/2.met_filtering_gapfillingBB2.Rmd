@@ -1,0 +1,256 @@
+---
+title: "2.met_filtering_gapfilling.R"
+author: "Sara Knox; revised Marion Nyberg"
+date: "09/09/2019; revised 16/05/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls())
+
+library(lubridate)
+library(tidyverse)
+library(zoo)
+library(tseries)
+library(plotly)
+
+# set wd
+getwd()
+#dir <- "../Flux-tower/"
+dir <- "/Users/marionnyberg/Google\ Drive/Micromet\ Lab/Projects/2019-Burns\ Bog\ 2/Flux-tower"
+knitr::opts_knit$set(root.dir = dir)
+```
+
+```{r load met_merged.csv, echo=FALSE, include=FALSE}
+ts<-read.csv( "/Users/marionnyberg/Google\ Drive/Micromet\ Lab/Projects/2019-Burns\ Bog\ 2/Flux-tower/met_data/met_merged/met_mergedBB2.csv",sep=",",header=TRUE,dec=".")
+head(ts)
+tail(ts)
+```
+
+```{r gap-fill rows by generating new column, include = FALSE}
+# before starting, check the length of df... shouldn't have NA at the end
+# also check format of timestamp
+
+ts$Timestamp <- as.POSIXct(ts$Timestamp,format="%Y-%m-%d %H:%M", tz = "UTC")
+
+#to estimate necessary parameters to generate the new empty dataframe with complete rows 
+begining<-as.numeric(ts$Timestamp[1])                           #to find the number that is represented by the first data of our time series
+as.POSIXct(begining,origin="1970-01-01 00:00:00",tz="UTC") #to confirm that the begining is the right one
+ts$Timestamp[1]
+     
+## Adding year and julian day columns
+ts$year <- year(ts$Timestamp)
+ts$jday <- yday(ts$Timestamp)
+ts$hour_dec <- hour(ts$Timestamp) + minute(ts$Timestamp)/60
+ 
+Ystart<-ts[1,match('year',names(ts))]
+Yend<-ts[nrow(ts),match('year',names(ts))]
+Dstart<-ts[1,match('jday',names(ts))]
+Dend<-ts[nrow(ts),match('jday',names(ts))]
+
+Ystart
+Yend
+Dstart
+Dend
+
+Ndays <- as.numeric((difftime(ts$Timestamp[nrow(ts)],ts$Timestamp[1], "UTC",
+         units = c("days"))), units="days")
+
+ts$obs<-c(1:nrow(ts)) 
+ts$obs[nrow(ts)]
+
+names(ts)
+```
+
+```{r create new dataframe with continuous time step, echo = FALSE}
+#To generate a serie of all minutes in a day:
+Tsteps <-begining+seq(from=0,to=((Ndays)*(60*60*24)),by=(30*60)) # half an hours data from the begining date to Ndays +1 (that way I assure all measured data are included in the new file) -> I did not use this method
+DATE <-as.POSIXct(Tsteps,origin="1970-01-01 00:00:00",tz="UTC")
+
+#Confirming length of the new Time string 
+#(THE NEW FILE SHOULD END SAME TIME THE TIME SERIES START AND ONE DAY AFTER THE MEASUREMENTS TIME SERIE)
+#DATE[1]
+#DATE[length(Tsteps)]
+#ts$Timestamp[1]
+#ts$Timestamp[length(ts$Timestamp)]
+if(DATE[1] ==  ts$Timestamp[1]){c('start dates match')} else {c('check start dates!')}
+if(DATE[length(Tsteps)] ==  ts$Timestamp[length(ts$Timestamp)]){c('end dates match')} else {c('check end dates!')}  
+
+#GENERATING A NEW DATA FRAME WITH CONTINUOUS TIME STEPS and data from THE ORIGINAL ONE
+cont.DS<-as.data.frame(DATE)
+cont.DS[,c(names(ts)[match( "AIR_TEMP_2M",names(ts)):length(names(ts))])]<-NA   #we will just copy the data from the variable "Batt_volt_Min" in ts (variable 3)
+cont.DS$DATE<-DATE
+#head(cont.DS)
+
+#FILLING THE NEW DATAFRAME WITH DATA FROM THE ORIGINAL DATA FRAME 
+for(i in 2:ncol(cont.DS)){  
+cont.DS[,i]<-ts[pmatch(cont.DS$DATE,ts$Timestamp),i]           #pmatch look for the observation rows when time columns of both (old and new) dataframes match
+                          } 
+cont.DS$year <- year(cont.DS$DATE)
+cont.DS$jday <- yday(cont.DS$DATE)
+cont.DS$hour_dec <- hour(cont.DS$DATE) + minute(cont.DS$DATE)/60
+```
+```{r apply corrections to met data, echo = FALSE}
+# add new corrections here if you notice errors/outliers in met data
+DATA<-cont.DS
+DATA$obs<-c(1:nrow(cont.DS))
+#head(DATA)
+#tail(DATA)
+DATA <- DATA[-nrow(DATA),]
+
+#Corrections  for RH
+bad_RH <- which(DATA$DATE <= '2020-03-29 00:00:00')
+
+DATA$RH_2M[bad_RH] <- NA
+
+#DATA$RH_2M[DATA$RH_2M >= '105'] <- NA
+
+#Correction for PAR - filter out -ve values
+bad_PAR <- which(DATA$INCOMING_PAR < 0)
+
+DATA$INCOMING_PAR[bad_PAR] <- NA
+```
+
+```{r gap-fill using ECCC data & ClimateAtUBC data, echo = FALSE}
+#Gapfilling using environment canada dataset (Burns Bog site) & climateATUBC (http://ibis.geog.ubc.ca/~achristn/data.html; http://137.82.254.122/DataExport.aspx)
+
+no_gapfilled <- DATA
+
+### 1. environment canada dataset: airT, RH, wind speed
+near_station <- read_csv("/Users/marionnyberg/Google\ Drive/Micromet\ Lab/Projects/2014-Burns\ Bog/Flux-tower/met_data/met_ancillary/ECCC/ECCC_met_merged.csv")
+#names(near_station)
+
+for (i in c(1, 2, 4, 5)){
+	var <- names(near_station)[i+5]
+	gap_row <- which(is.na(DATA[, grep(var, colnames(DATA))]))
+	intersect_row_for_near_station <- which(near_station$Timestamp %in% DATA$DATE[gap_row])
+	intersect_row_for_DATA <- which(DATA$DATE %in% near_station$Timestamp[intersect_row_for_near_station])
+	DATA[intersect_row_for_DATA, grep(var, colnames(DATA))] <- near_station[intersect_row_for_near_station, i+5]
+	
+	# linear interporation: environment canada data is 1 hour, so need to interpolated to make 30 min dataset
+	DATA[, grep(var, colnames(DATA))] <- na.approx(DATA[, grep(var, colnames(DATA))], na.rm = FALSE, rule = 2)
+}
+
+#plotting
+plot_ly(data = DATA, x = ~DATE, y = ~AIR_TEMP_2M, name = 'gap-filled', type = 'scatter', mode = 'lines') %>%
+  add_trace(data = no_gapfilled, x = ~DATE, y = ~AIR_TEMP_2M, name = 'non gap-filled', type = 'scatter', mode = 'lines') 
+
+plot_ly(data = DATA, x = ~DATE, y = ~RH_2M, name = 'gap-filled', type = 'scatter', mode = 'lines') %>%
+  add_trace(data = no_gapfilled, x = ~DATE, y = ~RH_2M, name = 'non gap-filled', type = 'scatter', mode = 'lines') 
+
+plot_ly(data = DATA, x = ~DATE, y = ~WIND_VELOCITY_CUP, name = 'gap-filled', type = 'scatter', mode = 'lines') %>%
+  add_trace(data = no_gapfilled, x = ~DATE, y = ~WIND_VELOCITY_CUP, name = 'non gap-filled', type = 'scatter', mode = 'lines') 
+
+plot_ly(data = DATA, x = ~DATE, y = ~PA_1.5M, name = 'gap-filled', type = 'scatter', mode = 'lines') %>%
+  add_trace(data = no_gapfilled, x = ~DATE, y = ~PA_1.5M, name = 'non gap-filled', type = 'scatter', mode = 'lines') 
+
+plot_ly(data = DATA, x = ~DATE, y = ~INCOMING_PAR, name = 'gap-filled', type = 'scatter', mode = 'lines') %>%
+  add_trace(data = no_gapfilled, x = ~DATE, y = ~INCOMING_PAR, name = 'non gap-filled', type = 'scatter', mode = 'lines') 
+
+
+### 2. climateATUBC dataset: Rg, ppt (http://137.82.254.122/DataExport.aspx) from Jan 1, 2014 to present & change extension to csv
+ubc <- read_csv("/Users/marionnyberg/Google\ Drive/Micromet\ Lab/Projects/2014-Burns\ Bog/Flux-tower/met_data/met_ancillary/ubc_climate/climateAtUBC.csv")
+# Date character -> Date data
+ubc$DATE <- as.POSIXct(ubc$time_stamp,format="%m/%d/%Y %I:%M:%S %p", tz = "UTC")
+gap <- which(is.na(ubc$DATE))
+ubc$DATE[gap] <- as.POSIXct(ubc$time_stamp,format="%m/%d/%Y", tz = "UTC")[gap]
+
+#subset
+st <- which(ubc$DATE== DATA$DATE[1])
+la <- which(ubc$DATE == DATA$DATE[nrow(DATA)])
+#la <- which(ubc$DATE == DATA$DATE)
+ubc_use <- ubc[c(st:la),]
+
+ubc_use$global_radiation_main[ubc_use$global_radiation_main == "-999"]<-NA
+
+# Because this data tower is pretty far from the BB tower, check relationships
+## 2.1. Rg
+#linear regression
+a<-round(coef(lm(DATA$SHORTWAVE_IN~ubc_use$global_radiation_main))[2],digits=2) #coef(lm(y~x))[2] is the slope of the regression
+b<-round(coef(lm(DATA$SHORTWAVE_IN~ubc_use$global_radiation_main))[1],digits=2)   
+r2<-round(summary(lm(DATA$SHORTWAVE_IN~ubc_use$global_radiation_main))$ r.squared,digits=2)
+lm_eq<-paste0("y=",a,"x",ifelse(b>0,"+",""),b)
+R2<-bquote(R^2 == .(r2)) 
+
+#gapfilling
+DATA$SHORTWAVE_IN[which(is.na(DATA$SHORTWAVE_IN))] <- ubc_use$global_radiation_main[which(is.na(DATA$SHORTWAVE_IN))]*a + b
+
+# Linearly interpolate small gaps where ubc data was -999
+DATA$SHORTWAVE_IN <- na.approx(DATA$SHORTWAVE_IN, na.rm = FALSE, rule = 2)
+
+#Plot:
+plot(ubc_use$global_radiation_main,no_gapfilled$SHORTWAVE_IN, main = "Global radiation (Short wave in)", xlab = "UBC climate site", ylab = "BB flux tower")
+abline(0,1,col='grey',lty=2)
+abline(lm(DATA$SHORTWAVE_IN~ubc_use$global_radiation_main),col='red')
+mtext( lm_eq,line = -1, side = 3)
+mtext(R2,line=-2, side = 3)
+
+#Plot time series:
+plot_ly(data = no_gapfilled, x = ~DATE, y = ~SHORTWAVE_IN, name = 'BB tower', type = 'scatter', mode = 'lines') %>%
+  add_trace(data = ubc_use, x = ~DATE, y = ~global_radiation_main, name = 'UBC tower', type = 'scatter', mode = 'lines') 
+
+# gapfilling plot
+plot_ly(data = DATA, x = ~DATE, y = ~SHORTWAVE_IN, name = 'gap-filled', type = 'scatter', mode = 'lines') %>%
+  add_trace(data = no_gapfilled, x = ~DATE, y = ~SHORTWAVE_IN, name = 'original', type = 'scatter', mode = 'lines') 
+
+## 2.2. Precipitation
+#gapfilling
+ubc_use$precipitation_main[ubc_use$precipitation_main == "-999"]<-NA
+
+DATA$PRECIP[which(is.na(DATA$PRECIP))] <- ubc_use$precipitation_main[which(is.na(DATA$PRECIP))]
+
+# Linearly interpolate small gaps where ubc data was -999
+DATA$PRECIP <- na.approx(DATA$PRECIP, na.rm = FALSE, rule = 2)
+
+#plot:
+plot_ly(data = ubc_use, x = ~DATE, y = ~precipitation_main, name = 'BB', type = 'scatter', mode = 'lines') %>%
+  add_trace(data = no_gapfilled, x = ~DATE, y = ~PRECIP, name = 'UBC', type = 'scatter', mode = 'lines') 
+
+plot_ly(data = DATA, x = ~DATE, y = ~PRECIP, name = 'gap-filled', type = 'scatter', mode = 'lines') %>%
+  add_trace(data = no_gapfilled, x = ~DATE, y = ~PRECIP, name = 'original', type = 'scatter', mode = 'lines') 
+
+#Linear interpolate small gaps where PAR was <0 
+DATA$INCOMING_PAR<- na.approx(DATA$INCOMING_PAR, na.rm = FALSE, rule = 2)
+
+```
+
+```{r create new output variables, echo = FALSE}
+### Make new column for net radiation, soil heat flux, available energy, es, vpd
+
+DATA$NR <- (DATA$SHORTWAVE_IN - DATA$SHORTWAVE_OUT) + 
+  (DATA$LONGWAVE_IN - DATA$LONGWAVE_OUT)
+
+DATA$G<-rowMeans(DATA[,grep('SHFP',names(DATA))],na.rm = TRUE)
+
+DATA$AE<-DATA$NR-DATA$G
+
+DATA$es <- 0.611*exp(17.502*DATA$AIR_TEMP_2M/(DATA$AIR_TEMP_2M+240.97))
+DATA$VPD <- DATA$es*(1-(DATA$RH_2M/100))
+
+#head(DATA)
+
+plot_ly(data = DATA, x = ~DATE, y = ~DATA$NR, name = 'NETRAD', type = 'scatter', mode = 'lines') %>%
+  add_trace(x = ~DATE, y = ~G,name = 'G', type = 'scatter', mode = 'lines') %>%
+  add_trace(x = ~DATE, y = ~AE, name = 'AE', type = 'scatter', mode = 'lines') 
+
+# Plot all variables
+for (i in 2:ncol(DATA)){
+	use <- DATA[,i]
+	
+	plot_ly(data = DATA, x = ~DATE, y = ~use, type = 'scatter', mode = 'lines') %>%
+	  layout(yaxis = list(title = names(DATA)[i]))
+}
+```
+
+#Removing extra rows at the start of data that predate installation of the EC tower
+# Because this was creating issues when running script 3 and the read_csv function
+```{r remove extra rows at start, echo = FALSE}
+DATA <- DATA %>%
+	filter(DATE >= "2019-11-19 00:00:00	")
+```
+
+```{r save filtered & gap-filled output, echo = FALSE}
+# save output
+write.csv(DATA,paste('/Users/marionnyberg/Google\ Drive/Micromet\ Lab/Projects/2019-Burns\ Bog\ 2/Flux-tower/met_data/met_merged/met_corrected_gapfilledBB2','.csv',sep=''),row.names=FALSE)      
+```

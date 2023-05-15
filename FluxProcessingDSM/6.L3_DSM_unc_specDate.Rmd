@@ -1,0 +1,201 @@
+---
+title: "6.L3"
+author: "Sara Knox"
+date: "04/20/2020"
+output: html_document
+---
+
+```{r Uncertainty estimation, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls())
+library(lognorm)
+library(lubridate)
+# Load L3 data to calculate uncertainty
+
+Rdir <- '/Users/ziyi/Library/CloudStorage/GoogleDrive-ziyi.tzuyilu@gmail.com/.shortcut-targets-by-id/1txCh9lZ7VGCujXGvBaJCMVnuxT-65q4K/Micromet Lab/Projects/' 
+# Micromet drive path on your laptop
+
+folder <- '2021-DSM Delta salt marsh'
+siteID <- 'DSM'
+
+dat <- read.csv(paste(Rdir,folder,'/Flux-tower/flux_data/',siteID,'_L3.csv',sep=''))
+dat$DATE<-as.POSIXct(dat$DATE,format="%Y-%m-%d %H:%M:%S")
+p<-which(dat$DATE>=bt & dat$DATE<=et)
+# Uncertainty analysis ----------------------------- #added TYL 2023APR28
+
+bt <- as.POSIXct("2022-06-01 15:00:00 UTC",format="%Y-%m-%d %H:%M:%S", tz = "America/Vancouver")# begin time
+et <- as.POSIXct("2023-04-03 23:59:59 UTC",format="%Y-%m-%d %H:%M:%S", tz = "America/Vancouver") # end time
+
+bts <- format(bt, "%Y%m%d")
+ets <- format(et, "%Y%m%d")
+
+
+# (1) NEE
+NEEunc <- dat %>% 
+  mutate(
+    NEE_orig_sd = ifelse(
+      is.finite(NEE_uStar_orig), NEE_uStar_fsd, NA), # NEE_orig_sd includes NEE_uStar_fsd only for measured values
+    NEE_uStar_fgood = ifelse(
+      NEE_uStar_fqc <= 1, is.finite(NEE_uStar_f), NA), # Only include filled values for the most reliable gap-filled observations. Note that is.finite() shouldn't be used here.
+    resid = ifelse(NEE_uStar_fqc == 0, NEE_uStar_orig - NEE_uStar_fall, NA)) # quantify the error terms, i.e. model-data residuals (only using observations and exclude also
+
+results <- tibble() # For storing results of annual sums and uncertainties
+
+NEEuncYr <- NEEunc[p,]
+  #if (i==YrMx) {ep<-nrow(uncInput)}else{ep <- i*48*365}
+  #NEEuncYr <- NEEunc[bp:ep,]
+  
+  
+  #NEEuncYr <- NEEunc[NEEunc$Year==i,]
+  
+  autoCorr <- lognorm::computeEffectiveAutoCorr(NEEuncYr$resid)
+  nEff <- lognorm::computeEffectiveNumObs(NEEuncYr$resid, na.rm = TRUE)
+  c(nEff = nEff, nObs = sum(is.finite(NEEuncYr$resid))) 
+  
+  #seg_1 <- tibble(uncInput$DateTime[bp],uncInput$DateTime[ep],nrow(NEEuncYr),nEff,sum(is.finite(NEEuncYr$resid)))
+  seg_1 <- tibble(head(NEEuncYr$DATE,1),tail(NEEuncYr$DATE,1),nrow(NEEuncYr),nEff,sum(is.finite(NEEuncYr$resid)))
+  
+  resRand <- NEEuncYr %>% summarise(
+    nRec = sum(is.finite(NEE_orig_sd))
+    , NEEagg = mean(NEE_uStar_f, na.rm = TRUE)
+    , varMean = sum(NEE_orig_sd^2, na.rm = TRUE) / nRec / (!!nEff - 1)
+    , sdMean = sqrt(varMean) 
+    , sdMeanApprox = mean(NEE_orig_sd, na.rm = TRUE) / sqrt(!!nEff - 1)
+    ) %>% select(NEEagg, sdMean, sdMeanApprox)
+  
+  # u* threshold uncertainty
+  ind <- which(grepl("NEE_U*", names(NEEuncYr)) & grepl("_f$", names(NEEuncYr)))
+  column_name <- names(NEEuncYr)[ind] 
+  
+  #calculate column means of specific columns
+  NEEagg <- colMeans(NEEuncYr[ ,column_name], na.rm=T)
+  NEEagg
+  
+  #compute uncertainty across aggregated values
+  sdNEEagg_ustar <- sd(NEEagg)
+  sdNEEagg_ustar
+  
+  # Combined aggregated uncertainty
+  #Assuming that the uncertainty due to unknown u*threshold is independent from the random uncertainty, the variances add.
+  NEE_sdAnnual <- data.frame(
+    sd_NEE_Rand = resRand$sdMean,
+    sd_NEE_Ustar = sdNEEagg_ustar,
+    sd_NEE_Comb = sqrt(resRand$sdMean^2 + sdNEEagg_ustar^2) 
+    )
+  NEE_sdAnnual
+  
+  data.mean_NEE_uStar_f <- data.frame(mean(NEEuncYr$NEE_uStar_f, na.rm = TRUE))
+  colnames(data.mean_NEE_uStar_f) <- 'mean_NEE_uStar_f'
+  NEE_sdAnnual <- cbind(data.mean_NEE_uStar_f,NEE_sdAnnual)
+  
+  # Convert to annual sums
+  conv_gCO2 <- 1/(10^6)*44.01*60*60*24*length(NEEuncYr$NEE_uStar_f)/48 # Converts umol to mol, mol to gCO2, x seconds in a year
+  conv_gC <- 1/(10^6)*12.011*60*60*24*length(NEEuncYr$NEE_uStar_f)/48  # Converts umol to mol, mol to gC,   x seconds in a year
+  
+  # g CO2
+  mean_sdAnnual_gCO2 <- NEE_sdAnnual*conv_gCO2
+  mean_sdAnnual_gCO2
+  # g C
+  mean_sdAnnual_gC <- NEE_sdAnnual*conv_gC
+  mean_sdAnnual_gC
+  
+  segs <- cbind(seg_1,as.tibble(mean_sdAnnual_gCO2),as.tibble(mean_sdAnnual_gC))
+    results <- rbind(results,segs)
+    
+
+
+colnames(results) <- c('StartDate','EndDate','AvailNum','EffNum','ObsNum',
+                       'AnnNEE_gCO2','UncNEE_Rand_gCO2','UncNEE_uStar_gCO2','UncNEE_Comb_gCO2',
+                       'AnnNEE_gC','UncNEE_Rand_gC','UncNEE_uStar_gC','UncNEE_Comb_gC')
+print(results, quote = FALSE, row.names = TRUE)
+
+
+outname <-paste(Rdir,folder,'/Flux-tower/flux_data/',siteID,'_NEE_uncertainty_',bts,'-',ets,'.csv',sep="")
+write.csv(as.matrix(results),outname, row.names = FALSE)
+
+# (2) FCH4
+
+
+FCH4unc <- dat  %>% 
+  mutate(
+    FCH4_orig_sd = ifelse(
+      is.finite(FCH4_uStar_orig), FCH4_uStar_fsd, NA), # NEE_orig_sd includes NEE_uStar_fsd only for measured values
+    FCH4_uStar_fgood = ifelse(
+      FCH4_uStar_fqc <= 1, is.finite(FCH4_uStar_f), NA), # Only include filled values for the most reliable gap-filled observations. Note that is.finite() shouldn't be used here.
+    resid = ifelse(FCH4_uStar_fqc == 0, FCH4_uStar_orig - FCH4_uStar_fall, NA)) # quantify the error terms, i.e. model-data residuals (only using observations and exclude also
+
+results <- tibble() # For storing results of annual sums and uncertainties
+
+FCH4uncYr <- FCH4unc[p,]
+  #bp <- (i-1)*48*365+1
+  #if (i==YrMx) {ep<-nrow(uncInput)}else{ep <- i*48*365}
+  
+  #FCH4uncYr <- FCH4unc[bp:ep,]
+  #FCH4uncYr <- FCH4unc[FCH4unc$Year==i,]
+  autoCorr  <- lognorm::computeEffectiveAutoCorr(FCH4uncYr$resid)
+  nEff      <- lognorm::computeEffectiveNumObs(FCH4uncYr$resid, na.rm = TRUE)
+  c(nEff = nEff, nObs = sum(is.finite(FCH4uncYr$resid)))
+  #seg_1 <- tibble(uncInput$DateTime[bp],uncInput$DateTime[ep],nrow(FCH4uncYr),nEff,sum(is.finite(FCH4uncYr$resid)))
+  seg_1 <- tibble(head(FCH4uncYr$DATE,1),tail(FCH4uncYr$DATE,1),nrow(FCH4uncYr),nEff,sum(is.finite(FCH4uncYr$resid)))
+  resRand <- FCH4uncYr %>% summarise(
+    nRec = sum(is.finite(FCH4_orig_sd))
+    , FCH4agg = mean(FCH4_uStar_f, na.rm = TRUE)
+    , varMean = sum(FCH4_orig_sd^2, na.rm = TRUE) / nRec / (!!nEff - 1)
+    , sdMean = sqrt(varMean) 
+    , sdMeanApprox = mean(FCH4_orig_sd, na.rm = TRUE) / sqrt(!!nEff - 1)
+    ) %>% select(FCH4agg, sdMean, sdMeanApprox)
+  
+  # u* threshold uncertainty
+  ind <- which(grepl("FCH4_U*", names(FCH4uncYr)) & grepl("_f$", names(FCH4uncYr)))
+  column_name <- names(FCH4uncYr)[ind] 
+  
+  #calculate column means of specific columns
+  FCH4agg <- colMeans(FCH4uncYr[ ,column_name], na.rm=T)
+  FCH4agg
+  
+  #compute uncertainty across aggregated values
+  sdFCH4agg_ustar <- sd(FCH4agg)
+  sdFCH4agg_ustar
+  
+  # Combined aggregated uncertainty
+  #Assuming that the uncertainty due to unknown u*threshold is independent from the random uncertainty, the variances add.
+  FCH4_sdAnnual <- data.frame(
+    sd_FCH4_Rand = resRand$sdMean,
+    sd_FCH4_Ustar = sdFCH4agg_ustar,
+    sd_FCH4_Comb = sqrt(resRand$sdMean^2 + sdFCH4agg_ustar^2) 
+    )
+  
+  FCH4_sdAnnual
+  data.mean_FCH4_uStar_f <- data.frame(mean(FCH4uncYr$FCH4_uStar_f, na.rm = TRUE))
+  colnames(data.mean_FCH4_uStar_f) <- 'mean_FCH4_uStar_f'
+  FCH4_sdAnnual <- cbind(data.mean_FCH4_uStar_f,FCH4_sdAnnual)
+  
+  # Create output data frame
+  mean_sdAnnual <- FCH4_sdAnnual
+  
+  # Convert to annual sums
+  conv_gCH4 <- 1/(10^6)*16.04*60*60*24*length(FCH4uncYr$FCH4_uStar_f)/48 # Converts umol to mol, mol to mgCH4, x seconds in a year
+  conv_gC <- 1/(10^6)*12.011*60*60*24*length(FCH4uncYr$FCH4_uStar_f)/48  # Converts umol to mol, mol to mgC,   x seconds in a year
+  
+  # g CH4
+  mean_sdAnnual_gCH4 <- mean_sdAnnual*conv_gCH4
+  mean_sdAnnual_gCH4
+  
+  # g C
+  mean_sdAnnual_gC <- mean_sdAnnual*conv_gC
+  mean_sdAnnual_gC
+  
+  segs <- cbind(seg_1,as.tibble(mean_sdAnnual_gCH4),as.tibble(mean_sdAnnual_gC))
+  results <- rbind(results,segs)
+
+
+colnames(results) <- c('StartDate','EndDate','AvailNum','EffNum','ObsNum',
+                       'AnnFCH4_gCH4','UncFCH4_Rand_gCH4','UncFCH4_uStar_gCH4','UncFCH4_Comb_gCH4',
+                       'AnnFCH4_gC','UncFCH4_Rand_gC','UncFCH4_uStar_gC','UncFCH4_Comb_gC')
+print(results, quote = FALSE, row.names = TRUE)
+
+
+outname <-paste(Rdir,folder,'/Flux-tower/flux_data/',siteID,'_FCH4_uncertainty_',bts,'-',ets,'.csv',sep="")
+write.csv(as.matrix(results),outname, row.names = FALSE)
+
+```
